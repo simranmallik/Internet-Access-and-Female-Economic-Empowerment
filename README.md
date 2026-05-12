@@ -50,7 +50,6 @@ All data is sourced from the [World Bank Gender Data Portal](https://genderdata.
 | Normality assessment | Shapiro-Wilk test, Anderson-Darling test, histograms, Q-Q plots |
 | Hypothesis testing | Mann-Whitney U test (Wilcoxon rank-sum) |
 | Multiple comparisons | Bonferroni correction (α = 0.025 per test) |
-| Effect size | Rank-biserial correlation r |
 
 Nonparametric methods were chosen because the Employment–High Internet group significantly violated normality (Anderson-Darling A*² = 2.17, p < 0.001), and cross-national development indicators are broadly known to exhibit skewed distributions.
 
