@@ -1,0 +1,426 @@
+---
+title: "Non Parametric Project"
+author: "Simran Mallik, Yuritzy Ramos, Melika Baghi,
+#          Keerthana Ramasubramonian"
+date: "2026-04-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+################################################################################
+# ISyE 6404 - Internet Access and Female Economic Empowerment: A Cross-National Nonparametric Analysis
+# Authors: Simran Mallik, Yuritzy Ramos, Melika Baghi,Keerthana Ramasubramonian
+# Data Source: World Bank Gender Data Portal (2022)
+################################################################################
+
+```{r}
+#Install and Load Required Packages
+required_packages <- c("dplyr", "tidyr", "ggplot2", "nortest", "gridExtra")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
+if (length(new_packages)) install.packages(new_packages, repos = "https://cran.r-project.org")
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(nortest)
+library(gridExtra)
+
+
+#Load and Prepare Data
+cat("LOADING AND PREPARING DATA")
+
+#Read the three CSV datasets (update paths as needed)
+internet <- read.csv("Individuals using the Internet (percent of population).csv",
+                      stringsAsFactors = FALSE)
+employment <- read.csv("Employment to population ratio (percent).csv",
+                        stringsAsFactors = FALSE)
+management <- read.csv("Female share of employment in senior and middle management (percent).csv",
+                        stringsAsFactors = FALSE)
+
+#World Bank aggregate/region codes to exclude (not individual countries)
+aggregate_codes <- c("AFE", "AFW", "ARB", "CEB", "CSS", "EAP", "EAR", "EAS",
+                     "ECA", "ECS", "EMU", "EUU", "FCS", "HIC", "HPC", "IBD",
+                     "IBT", "IDA", "IDB", "IDX", "INX", "LAC", "LCN", "LDC",
+                     "LIC", "LMC", "LMY", "LTE", "MEA", "MIC", "MNA", "NAC",
+                     "OED", "OSS", "PRE", "PSS", "PST", "SAS", "SSA", "SSF",
+                     "SST", "TEA", "TEC", "TLA", "TMN", "TSA", "TSS", "UMC",
+                     "WLD")
+
+# Filter internet data for 2022 and keeps observations for "total" disaggregation only rather
+# than female or male specifically 
+internet_2022 <- internet %>%
+  filter(Year == 2022,
+         !(Country.Code %in% aggregate_codes),
+         grepl("total", Disaggregation, ignore.case = TRUE)) %>%
+  mutate(Internet = as.numeric(Value)) %>%
+  select(Country.Name, Country.Code, Internet) %>%
+  filter(!is.na(Internet)) %>%
+  distinct(Country.Code, .keep_all = TRUE)
+
+#Filter employment for 2022 and keeps observations for "female, Modeled, 15+" disaggregation
+employment_2022 <- employment %>%
+  filter(Year == 2022,
+         !(Country.Code %in% aggregate_codes),
+         grepl("female", Disaggregation, ignore.case = TRUE),
+         grepl("Modeled", Disaggregation, ignore.case = TRUE),
+         grepl("15\\+", Disaggregation)) %>%
+  mutate(Employment = as.numeric(Value)) %>%
+  select(Country.Name, Country.Code, Employment) %>%
+  filter(!is.na(Employment)) %>%
+  distinct(Country.Code, .keep_all = TRUE)
+
+#Filter management for 2022
+management_2022 <- management %>%
+  filter(Year == 2022,
+         !(Country.Code %in% aggregate_codes)) %>%
+  mutate(Management = as.numeric(Value)) %>%
+  select(Country.Name, Country.Code, Management) %>%
+  filter(!is.na(Management)) %>%
+  distinct(Country.Code, .keep_all = TRUE)
+
+# cat(sprintf("Unique countries (2022): Internet=%d, Employment(female)=%d, Management=%d\n",nrow(internet_2022), nrow(employment_2022), nrow(management_2022)))
+
+```
+
+
+
+```{r}
+#Merge employment and internet data sets (inner join keeps only countries with both variables)
+data_emp <- inner_join(internet_2022, employment_2022,
+                       by = c("Country.Name", "Country.Code")) %>%
+  filter(!is.na(Internet), !is.na(Employment))
+
+#Merge internet and management data sets 
+data_mgmt <- inner_join(internet_2022, management_2022,
+                        by = c("Country.Name", "Country.Code")) %>%
+  filter(!is.na(Internet), !is.na(Management))
+
+#Count how many rows we have matched in each dataset
+cat(sprintf("Merged: Internet + Employment = %d countries\n", nrow(data_emp)))
+cat(sprintf("Merged: Internet + Management = %d countries\n\n", nrow(data_mgmt)))
+
+#Record how many rows we saw:
+# data_emp has 170 rows
+# data_mgmt has 93 rows
+```
+
+```{r}
+#Classify Countries by Internet Access
+cat("CLASSIFY INTO HIGH/LOW INTERNET ACCESS GROUPS\n")
+#Threshold: 50% (consistent with ITU global average, 2019)
+
+data_emp$Group <- ifelse(data_emp$Internet >= 50,
+                         "High Internet (>=50%)",
+                         "Low Internet (<50%)")
+data_mgmt$Group <- ifelse(data_mgmt$Internet >= 50,
+                          "High Internet (>=50%)",
+                          "Low Internet (<50%)")
+
+cat("Employment dataset group sizes:\n")
+print(table(data_emp$Group))
+cat("\nManagement dataset group sizes:\n")
+print(table(data_mgmt$Group))
+
+```
+
+```{r}
+#Descriptive Statistics 
+cat("DESCRIPTIVE STATISTICS\n\n")
+#Produce the summary statistics for female employment by internet access group (high vs. low)
+
+cat("Female Employment Rate (%) by Internet Access Group:\n")
+desc_emp <- data_emp %>%
+  group_by(Group) %>%
+  summarise(
+    N = n(),
+    Mean = round(mean(Employment), 2),
+    Median = round(median(Employment), 2),
+    SD = round(sd(Employment), 2),
+    Min = round(min(Employment), 2),
+    Max = round(max(Employment), 2),
+    IQR = round(IQR(Employment), 2),
+    .groups = "drop"
+  )
+print(as.data.frame(desc_emp))
+```
+
+
+
+```{r}
+cat("\nFemale Share of Senior/Middle Management (%) by Internet Access Group:\n")
+desc_mgmt <- data_mgmt %>%
+  group_by(Group) %>%
+  summarise(
+    N = n(),
+    Mean = round(mean(Management), 2),
+    Median = round(median(Management), 2),
+    SD = round(sd(Management), 2),
+    Min = round(min(Management), 2),
+    Max = round(max(Management), 2),
+    IQR = round(IQR(Management), 2),
+    .groups = "drop"
+  )
+print(as.data.frame(desc_mgmt))
+cat("\n")
+```
+
+```{r}
+#Normality Testing
+cat("NORMALITY ASSESSMENT \n\n")
+
+# Split data into groups based on low or high internet access
+emp_high <- data_emp$Employment[data_emp$Group == "High Internet (>=50%)"]
+emp_low  <- data_emp$Employment[data_emp$Group == "Low Internet (<50%)"]
+mgmt_high <- data_mgmt$Management[data_mgmt$Group == "High Internet (>=50%)"]
+mgmt_low  <- data_mgmt$Management[data_mgmt$Group == "Low Internet (<50%)"]
+
+#Shapiro-Wilk Test
+cat("Shapiro-Wilk Test (H0: data is normally distributed; reject if p < 0.05)\n\n")
+
+#Run a Shapiro-Wilk Test for each split of the data
+sw_emp_high <- shapiro.test(emp_high)
+sw_emp_low  <- shapiro.test(emp_low)
+sw_mgmt_high <- shapiro.test(mgmt_high)
+sw_mgmt_low  <- shapiro.test(mgmt_low)
+
+#Check the results from the Shapiro-Wilk Test 
+cat(sprintf("  Employment - High Internet (n=%d): W=%.4f, p=%.4f  %s\n",
+            length(emp_high), sw_emp_high$statistic, sw_emp_high$p.value,
+            ifelse(sw_emp_high$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+cat(sprintf("  Employment - Low Internet  (n=%d): W=%.4f, p=%.4f  %s\n",
+            length(emp_low), sw_emp_low$statistic, sw_emp_low$p.value,
+            ifelse(sw_emp_low$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+cat(sprintf("  Management - High Internet (n=%d): W=%.4f, p=%.4f  %s\n",
+            length(mgmt_high), sw_mgmt_high$statistic, sw_mgmt_high$p.value,
+            ifelse(sw_mgmt_high$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+cat(sprintf("  Management - Low Internet  (n=%d): W=%.4f, p=%.4f  %s\n\n",
+            length(mgmt_low), sw_mgmt_low$statistic, sw_mgmt_low$p.value,
+            ifelse(sw_mgmt_low$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+
+## 3 of the data splits failed to reject the null hypothesis and 1 data split rejected the null hypothesis (non-normal distribution)
+
+```
+
+```{r}
+#Anderson-Darling Test 
+cat("Anderson-Darling Test\n\n")
+
+#Here our hypothesis is H0: data is normally distributed; reject if p < 0.05
+ad_emp_high <- ad.test(emp_high)
+ad_emp_low  <- ad.test(emp_low)
+ad_mgmt_high <- ad.test(mgmt_high)
+ad_mgmt_low  <- ad.test(mgmt_low)
+
+#Print the results for the 4 data splits
+cat(sprintf("  Employment - High Internet (n=%d): A=%.4f, p=%.4f  %s\n",
+            length(emp_high), ad_emp_high$statistic, ad_emp_high$p.value,
+            ifelse(ad_emp_high$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+cat(sprintf("  Employment - Low Internet  (n=%d): A=%.4f, p=%.4f  %s\n",
+            length(emp_low), ad_emp_low$statistic, ad_emp_low$p.value,
+            ifelse(ad_emp_low$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+cat(sprintf("  Management - High Internet (n=%d): A=%.4f, p=%.4f  %s\n",
+            length(mgmt_high), ad_mgmt_high$statistic, ad_mgmt_high$p.value,
+            ifelse(ad_mgmt_high$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+cat(sprintf("  Management - Low Internet  (n=%d): A=%.4f, p=%.4f  %s\n\n",
+            length(mgmt_low), ad_mgmt_low$statistic, ad_mgmt_low$p.value,
+            ifelse(ad_mgmt_low$p.value < 0.05, "→ REJECT", "→ Fail to reject")))
+
+## The same 3 splits of the data failed to reject the null hypothesis and the same split for employment with high internet access rejected the null hypothesis (non-normal distribution)
+
+
+```
+
+```{r}
+
+#Visual Diagnostics
+cat("VISUAL DIAGNOSTICS OF DATA\n\n")
+
+#Figure 1: Histograms with Median Lines
+p1 <- ggplot(data_emp, aes(x = Employment, fill = Group)) +
+  geom_histogram(bins = 12, alpha = 0.7, color = "white") +
+  geom_vline(data = data_emp %>% group_by(Group) %>%
+               summarise(med = median(Employment), .groups = "drop"),
+             aes(xintercept = med), linetype = "dashed", linewidth = 1) +
+  facet_wrap(~Group, scales = "free_y") +
+  labs(title = "Distribution of Female Employment Rate by Internet Access Group",
+       x = "Female Employment to Population Ratio (%)",
+       y = "Frequency") +
+  scale_fill_manual(values = c("High Internet (>=50%)" = "#2166AC",
+                                "Low Internet (<50%)" = "#B2182B")) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold"))
+
+p2 <- ggplot(data_mgmt, aes(x = Management, fill = Group)) +
+  geom_histogram(bins = 12, alpha = 0.7, color = "white") +
+  geom_vline(data = data_mgmt %>% group_by(Group) %>%
+               summarise(med = median(Management), .groups = "drop"),
+             aes(xintercept = med), linetype = "dashed", linewidth = 1) +
+  facet_wrap(~Group, scales = "free_y") +
+  labs(title = "Distribution of Female Share of Sr/Mid Management by Internet Access Group",
+       x = "Female Share of Employment in Senior & Middle Management (%)",
+       y = "Frequency") +
+  scale_fill_manual(values = c("High Internet (>=50%)" = "#2166AC",
+                                "Low Internet (<50%)" = "#B2182B")) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold"))
+
+grid.arrange(p1, p2, ncol = 1)
+
+#Figure 2: QQ-Plots - double checking our normality results
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+qqnorm(emp_high, main = paste0("Q-Q Plot: Employment\nHigh Internet (n=",
+       length(emp_high), ")"), col = "#2166AC", pch = 16)
+qqline(emp_high, col = "red", lwd = 2)
+qqnorm(emp_low, main = paste0("Q-Q Plot: Employment\nLow Internet (n=",
+       length(emp_low), ")"), col = "#B2182B", pch = 16)
+qqline(emp_low, col = "red", lwd = 2)
+qqnorm(mgmt_high, main = paste0("Q-Q Plot: Management\nHigh Internet (n=",
+       length(mgmt_high), ")"), col = "#2166AC", pch = 16)
+qqline(mgmt_high, col = "red", lwd = 2)
+qqnorm(mgmt_low, main = paste0("Q-Q Plot: Management\nLow Internet (n=",
+       length(mgmt_low), ")"), col = "#B2182B", pch = 16)
+qqline(mgmt_low, col = "red", lwd = 2)
+
+# Box Plots Side by Side
+p3 <- ggplot(data_emp, aes(x = Group, y = Employment, fill = Group)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "red", outlier.size = 2) +
+  labs(title = "Female Employment Rate\nby Internet Access Group",
+       x = "", y = "Female Employment to Population Ratio (%)") +
+  scale_fill_manual(values = c("High Internet (>=50%)" = "#2166AC",
+                                "Low Internet (<50%)" = "#B2182B")) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold"))
+
+p4 <- ggplot(data_mgmt, aes(x = Group, y = Management, fill = Group)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "red", outlier.size = 2) +
+  labs(title = "Female Share of Sr/Mid Management\nby Internet Access Group",
+       x = "", y = "Female Share of Sr/Mid Management (%)") +
+  scale_fill_manual(values = c("High Internet (>=50%)" = "#2166AC",
+                                "Low Internet (<50%)" = "#B2182B")) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold"))
+
+grid.arrange(p3, p4, ncol = 2)
+
+
+```
+
+
+```{r}
+#Mann-Whitney U Tests
+cat("MANN-WHITNEY U TESTS\n")
+# Use a Bonferroni-corrected alpha = 0.025 per test
+
+#Test 1: Employment
+cat("TEST 1: Female Employment Rate ~ Internet Access Group\n")
+#Hypothesis 
+#H0: No difference in median female employment rate between countries with high vs. low national internet usage
+#Ha: The medians differ
+
+#Run the Mann-Whitney Test
+mw_emp <- wilcox.test(Employment ~ Group, data = data_emp,
+                       alternative = "two.sided", exact = FALSE, correct = TRUE)
+
+#Print the results
+cat(sprintf("  W statistic: %.1f\n", mw_emp$statistic))
+cat(sprintf("  p-value:     %.6f\n", mw_emp$p.value))
+cat(sprintf("  Decision (alpha = 0.025): %s H0\n\n",
+            ifelse(mw_emp$p.value < 0.025, "*** REJECT ***", "FAIL TO REJECT"))) #State whether we reject null hypothesis or not
+
+# Determine the effect size: r = |Z| / sqrt(N)
+z_emp <- qnorm(mw_emp$p.value / 2)
+r_emp <- abs(z_emp) / sqrt(nrow(data_emp))
+
+#Report effect size
+cat(sprintf("  Effect size r = |Z|/sqrt(N): %.4f (%s)\n",
+            r_emp,
+            ifelse(r_emp < 0.1, "negligible",
+                   ifelse(r_emp < 0.3, "small",
+                          ifelse(r_emp < 0.5, "medium", "large")))))
+
+#Print medians of the high and low internet access groups
+cat(sprintf("  Median (High Internet): %.2f%%\n", median(emp_high)))
+cat(sprintf("  Median (Low Internet):  %.2f%%\n\n", median(emp_low)))
+
+#Test 2: Management
+cat("TEST 2: Female Share of Sr/Mid Management ~ Internet Access Group\n")
+#H0: No difference in median female management share between countries with high vs. low national internet usage
+#Ha: The medians differ
+
+#Run Mann Whitney Test
+mw_mgmt <- wilcox.test(Management ~ Group, data = data_mgmt,
+                         alternative = "two.sided", exact = FALSE, correct = TRUE)
+#Report the results
+cat(sprintf("  W statistic: %.1f\n", mw_mgmt$statistic))
+cat(sprintf("  p-value:     %.6f\n", mw_mgmt$p.value))
+cat(sprintf("  Decision (alpha = 0.025): %s H0\n\n",
+            ifelse(mw_mgmt$p.value < 0.025, "*** REJECT ***", "FAIL TO REJECT"))) #State if we reject null or not
+
+##Determine effect size
+z_mgmt <- qnorm(mw_mgmt$p.value / 2)
+r_mgmt <- abs(z_mgmt) / sqrt(nrow(data_mgmt))
+
+#Report effect size
+cat(sprintf("  Effect size r = |Z|/sqrt(N): %.4f (%s)\n",
+            r_mgmt,
+            ifelse(r_mgmt < 0.1, "negligible",
+                   ifelse(r_mgmt < 0.3, "small",
+                          ifelse(r_mgmt < 0.5, "medium", "large")))))
+
+#Print medians of the high and low internet access groups
+cat(sprintf("  Median (High Internet): %.2f%%\n", median(mgmt_high)))
+cat(sprintf("  Median (Low Internet):  %.2f%%\n\n", median(mgmt_low)))
+
+```
+
+```{r}
+
+#Summary of Findings
+#Compile all the findings here
+
+cat("=================================================================\n")
+cat("                    SUMMARY OF FINDINGS\n")
+cat("=================================================================\n\n")
+
+cat("1. NORMALITY ASSESSMENT:\n")
+cat("   Shapiro-Wilk and Anderson-Darling tests, along with histogram\n")
+cat("   and Q-Q plot diagnostics, indicate departures from normality\n")
+cat("   in at least some groups, justifying the use of nonparametric\n")
+cat("   Mann-Whitney U tests.\n\n")
+
+cat("2. TEST 1 — Female Employment Rate:\n")
+cat(sprintf("   Median (High Internet): %.2f%%\n", median(emp_high)))
+cat(sprintf("   Median (Low Internet):  %.2f%%\n", median(emp_low)))
+cat(sprintf("   Mann-Whitney p-value:   %.6f\n", mw_emp$p.value))
+cat(sprintf("   Decision: %s H0 at Bonferroni alpha = 0.025\n",
+            ifelse(mw_emp$p.value < 0.025, "REJECT", "FAIL TO REJECT")))
+cat("   → Countries with LOW internet access tend to have HIGHER female\n")
+cat("     employment rates, likely reflecting informal/agricultural labor.\n\n")
+
+cat("3. TEST 2 — Female Share of Senior/Middle Management:\n")
+cat(sprintf("   Median (High Internet): %.2f%%\n", median(mgmt_high)))
+cat(sprintf("   Median (Low Internet):  %.2f%%\n", median(mgmt_low)))
+cat(sprintf("   Mann-Whitney p-value:   %.6f\n", mw_mgmt$p.value))
+cat(sprintf("   Decision: %s H0 at Bonferroni alpha = 0.025\n",
+            ifelse(mw_mgmt$p.value < 0.025, "REJECT", "FAIL TO REJECT")))
+cat("   → Countries with HIGH internet access have significantly HIGHER\n")
+cat("     female representation in senior/middle management.\n\n")
+
+cat("4. INTERPRETATION:\n")
+cat("   While higher internet access is associated with greater female\n")
+cat("   representation in management, the relationship with overall\n")
+cat("   employment is more nuanced. Low-internet countries may show\n")
+cat("   higher female employment due to informal and agricultural labor.\n\n")
+cat("   This analysis is cross-sectional and correlational. No causal\n")
+cat("   claims are made. Confounding factors such as regional cultural\n")
+cat("   norms, economic development level, and labor market policies\n")
+cat("   may influence both internet access and female economic outcomes.\n")
+cat("=================================================================\n")
+```
